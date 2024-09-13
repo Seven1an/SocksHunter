@@ -30,10 +30,78 @@ type FofaResponse struct {
 	Mode            string     `json:"mode"`
 	Query           string     `json:"query"`
 	Results         [][]string `json:"results"`
-	Errmsg          string     `json:"errmsg"` // 增加 errmsg 字段
+	Errmsg          string     `json:"errmsg"`
 }
 
-// 检查代理是否可用
+// 获取size
+func getFofaTotalCount(apiKey string) (int, error) {
+	baseURL := "https://fofa.info/api/v1/search/all"
+	qbase64 := "cHJvdG9jb2w9InNvY2tzNSIgJiYgIlZlcnNpb246NSBNZXRob2Q6Tm8gQXV0aGVudGljYXRpb24oMHgwMCkiICYmIGNvdW50cnk9IkNOIg=="
+	size := "1"
+
+	requestURL := fmt.Sprintf("%s?key=%s&qbase64=%s&size=%s", baseURL, url.QueryEscape(apiKey), url.QueryEscape(qbase64), size)
+
+	response, err := http.Get(requestURL)
+	if err != nil {
+		return 0, fmt.Errorf("connection to Fofa error: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("request failed with status: %s", response.Status)
+	}
+
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return 0, fmt.Errorf("error reading response body: %v", err)
+	}
+
+	var fofaResp FofaResponse
+	if err := json.Unmarshal(body, &fofaResp); err != nil {
+		return 0, fmt.Errorf("error parsing JSON response: %v", err)
+	}
+
+	if fofaResp.Errmsg == "[-700] 账号无效" {
+		return 0, fmt.Errorf("error APIKey: %v", fofaResp.Errmsg)
+	}
+
+	return fofaResp.Size, nil
+}
+
+// 获取代理
+func getProxies(apiKey string, size int) ([][]string, error) {
+	baseURL := "https://fofa.info/api/v1/search/all"
+	qbase64 := "cHJvdG9jb2w9InNvY2tzNSIgJiYgIlZlcnNpb246NSBNZXRob2Q6Tm8gQXV0aGVudGljYXRpb24oMHgwMCkiICYmIGNvdW50cnk9IkNOIg=="
+
+	requestURL := fmt.Sprintf("%s?key=%s&qbase64=%s&size=%d", baseURL, url.QueryEscape(apiKey), url.QueryEscape(qbase64), size)
+
+	response, err := http.Get(requestURL)
+	if err != nil {
+		return nil, fmt.Errorf("connection to Fofa error: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("request failed with status: %s", response.Status)
+	}
+
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %v", err)
+	}
+
+	var fofaResp FofaResponse
+	if err := json.Unmarshal(body, &fofaResp); err != nil {
+		return nil, fmt.Errorf("error parsing JSON response: %v", err)
+	}
+
+	if fofaResp.Errmsg == "[-700] 账号无效" {
+		return nil, fmt.Errorf("error APIKey: %v", fofaResp.Errmsg)
+	}
+
+	return fofaResp.Results, nil
+}
+
 func checkProxy(socks5Addr string, wg *sync.WaitGroup, availableProxies *[]string, mutex *sync.Mutex) {
 	defer wg.Done()
 
@@ -158,8 +226,8 @@ func startV2ray() {
 
 // 启动本地代理服务器，按顺序使用可用代理列表
 func main() {
-	info :=
-		`====================================================
+	info := `
+====================================================
  ██╗   ██╗███████╗██╗  ██╗███████╗███████╗ ██████╗
  ╚██╗ ██╔╝██╔════╝╚██╗██╔╝██╔════╝██╔════╝██╔════╝
   ╚████╔╝ █████╗   ╚███╔╝ ███████╗█████╗  ██║     
@@ -170,7 +238,6 @@ func main() {
 ====================================================`
 	fmt.Println(info)
 
-	// 从 config.ini 文件中读取 apiKey
 	cfg, err := ini.Load("config.ini")
 	if err != nil {
 		fmt.Printf("Error loading config file: %v\n", err)
@@ -183,65 +250,31 @@ func main() {
 		return
 	}
 
-	// 构建请求 URL
-	baseURL := "https://fofa.info/api/v1/search/all"
-	qbase64 := "cHJvdG9jb2w9InNvY2tzNSIgJiYgIlZlcnNpb246NSBNZXRob2Q6Tm8gQXV0aGVudGljYXRpb24oMHgwMCkiICYmIGNvdW50cnk9IkNOIg=="
-	size := "50"
-
-	// 使用 net/url 包安全地构建 URL
-	requestURL := fmt.Sprintf("%s?key=%s&qbase64=%s&size=%s", baseURL, url.QueryEscape(apiKey), url.QueryEscape(qbase64), size)
-
-	// 发起 HTTP 请求
-	response, err := http.Get(requestURL)
+	totalCount, err := getFofaTotalCount(apiKey)
 	if err != nil {
-		fmt.Printf("Connection to Fofa error: %v\n", err)
+		fmt.Printf("Error getting total count: %v\n", err)
 		return
 	}
-	defer response.Body.Close()
-
-	// 检查响应状态码
-	if response.StatusCode != http.StatusOK {
-		fmt.Printf("Request failed with status: %s\n", response.Status)
-		return
-	}
-
-	// 读取响应体
-	body, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		fmt.Printf("Error reading response body: %v\n", err)
-		return
-	}
-
-	// 解析 JSON 响应
-	var fofaResp FofaResponse
-	if err := json.Unmarshal(body, &fofaResp); err != nil {
-		fmt.Printf("Error parsing JSON response: %v\n", err)
-		return
-	}
-
-	// 检查 API 密钥是否有效
-	if fofaResp.Errmsg == "[-700] 账号无效" {
-		fmt.Println("Error APIKey!\tExit")
-		return
-	}
-
-	// 输出总结果数量
 	now := time.Now()
 	formattedTime := now.Format("2006-01-02 15:04:05")
-	fmt.Printf("CurrentDate:%s AddressTotal: [%d]\n", formattedTime, fofaResp.Size)
+	fmt.Printf("CurrentDate:%s AddressTotal: [%d]\n", formattedTime, totalCount)
 
-	// 询问用户想要检测多少条
 	var userCount int
 	for {
-		fmt.Printf("How many proxies do you want to check? (Max: %d): ", fofaResp.Size)
+		fmt.Printf("How many proxies do you want to check? (Max: %d): ", totalCount)
 		fmt.Scanln(&userCount)
 
-		// 检查用户输入的条目数是否合法
-		if userCount > 0 && userCount <= fofaResp.Size {
+		if userCount > 0 && userCount <= totalCount {
 			break
 		} else {
 			fmt.Println("Invalid input, please enter a number less than or equal to the total size.")
 		}
+	}
+
+	proxies, err := getProxies(apiKey, userCount)
+	if err != nil {
+		fmt.Printf("Error getting proxies: %v\n", err)
+		return
 	}
 
 	// 并发检查每个 IP 是否可用
@@ -249,12 +282,7 @@ func main() {
 	var availableProxies []string
 	var mutex sync.Mutex
 
-	// 根据用户输入的数量进行检测
-	for i, result := range fofaResp.Results {
-		if i >= userCount { // 控制检测条目数
-			break
-		}
-
+	for _, result := range proxies {
 		if len(result) >= 2 {
 			ipPort := fmt.Sprintf("%s", result[0])
 			wg.Add(1)
@@ -265,11 +293,9 @@ func main() {
 	wg.Wait()
 
 	if len(availableProxies) > 0 {
-		// 生成时间戳
 		timestamp := time.Now().Format("20060102_150405")
 		filename := fmt.Sprintf("./AvailableList/available_proxies_%s.txt", timestamp)
 
-		// 打开文件并写入可用 IP 和端口
 		file, err := os.Create(filename)
 		if err != nil {
 			fmt.Printf("Error creating file: %v\n", err)
@@ -284,36 +310,28 @@ func main() {
 		fmt.Printf("Available list saved ==> %s\n", filename)
 		fmt.Println("Socks port: [8888]\n")
 
-		// 可用代理
 		for i, proxy := range availableProxies {
 			fmt.Printf("Using proxy [%d/%d]: %s\n", i+1, len(availableProxies), proxy)
 			updateV2rayConfig(proxy, len(availableProxies))
 
-			// 刷新标准输出
 			os.Stdout.Sync()
 
-			// 如果是最后一个代理，或者只有一个代理
 			if len(availableProxies) == 1 || i == len(availableProxies)-1 {
-				// 只提示退出
 				fmt.Println("This is the last proxy. Enter 'q' to quit: ")
 
-				// 等待用户输入 'q' 退出
 				for {
 					var input string
 					fmt.Scanln(&input)
 
 					input = strings.ToLower(input)
 					if input == "q" {
-						// 用户选择了 'q'，退出程序
 						fmt.Println("Exiting...")
-						return // 退出整个程序
+						return
 					} else {
-						// 无效输入，提示用户再次输入
 						fmt.Println("Invalid input, please enter 'q' to quit.")
 					}
 				}
 			} else {
-				// 提示用户继续或退出
 				for {
 					var input string
 					fmt.Println("Enter 'n' to use the next proxy or 'q' to quit: ")
@@ -321,24 +339,18 @@ func main() {
 
 					input = strings.ToLower(input)
 					if input == "n" {
-						// 用户选择了 'n'，继续使用下一个代理
 						fmt.Println("Switching to the next proxy...")
-						break // 跳出当前循环，继续到下一个代理
+						break
 					} else if input == "q" {
-						// 用户选择了 'q'，退出程序
 						fmt.Println("Exiting...")
-						return // 退出整个程序
+						return
 					} else {
-						// 无效输入，提示用户再次输入
 						fmt.Println("Invalid input, please enter 'n' for next proxy or 'q' to quit.")
 					}
 				}
 			}
 
-			// 停止上一个 v2ray 实例
 			stopV2ray()
-
-			// 启动新的 v2ray 实例
 			startV2ray()
 		}
 

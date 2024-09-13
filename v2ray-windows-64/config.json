@@ -1,0 +1,26 @@
+{
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 8888,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "116.16.196.5",
+            "port": 5555
+          }
+        ]
+      }
+    }
+  ]
+}
